@@ -1,54 +1,65 @@
 #!/usr/bin/env python3
 """
-This module provides a function to fetch web page content
-with Redis-based caching and URL access counting using decorators.
+Module for implementing an expiring web cache and tracker using Redis.
 """
-
 import redis
 import requests
-from functools import wraps
 from typing import Callable
+from functools import wraps
 
-r = redis.Redis()
 
+def count_access(method: Callable) -> Callable:
+    """
+    Decorator to track the number of times a URL is accessed and cache the result.
 
-def count_url_access(method: Callable) -> Callable:
-    """Decorator to count how many times a URL is accessed."""
+    Args:
+        method: The function to decorate.
+
+    Returns:
+        Callable: The wrapped function.
+    """
     @wraps(method)
     def wrapper(url: str) -> str:
-        r.incr(f"count:{url}")
-        return method(url)
+        """
+        Increments the access count, checks the cache, and fetches the page if needed.
+
+        Args:
+            url: The URL to fetch and cache.
+
+        Returns:
+            str: The HTML content of the URL.
+        """
+        redis_client = redis.Redis()
+        count_key = f"count:{url}"
+        cache_key = f"cache:{url}"
+
+        # Increment access count
+        redis_client.incr(count_key)
+
+        # Check if URL is cached
+        cached_content = redis_client.get(cache_key)
+        if cached_content:
+            return cached_content.decode('utf-8')
+
+        # Fetch content if not cached
+        result = method(url)
+        # Cache with 10-second expiration
+        redis_client.setex(cache_key, 10, result)
+        return result
+
     return wrapper
 
 
-def cache_page(expiration: int = 10) -> Callable:
-    """Decorator to cache page content in Redis for a given number of seconds."""
-    def decorator(method: Callable) -> Callable:
-        @wraps(method)
-        def wrapper(url: str) -> str:
-            cache_key = f"cache:{url}"
-            cached = r.get(cache_key)
-            if cached:
-                return cached.decode('utf-8')
-            result = method(url)
-            r.setex(cache_key, expiration, result)
-            return result
-        return wrapper
-    return decorator
-
-
-@cache_page(expiration=10)
-@count_url_access
+@count_access
 def get_page(url: str) -> str:
     """
-    Fetch the HTML content of a URL.
-
-    This version uses decorators for caching and counting.
+    Fetches the HTML content of a URL, caches it for 10 seconds, and tracks access.
 
     Args:
         url: The URL to fetch.
 
     Returns:
-        The HTML content of the page.
+        str: The HTML content of the URL.
     """
-    return requests.get(url).text
+    response = requests.get(url)
+    return response.text
